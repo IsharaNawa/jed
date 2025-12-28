@@ -36,7 +36,7 @@ public:
     }
 
     // read one bit (0 or 1) or return -1 if all bits have already been read
-    uint readBit() {
+    uint readBit() {  
         if (nextBit == 0) {
             if (!hasBits()) {
                 return -1;
