@@ -1454,13 +1454,15 @@ void upsample(Header* const image) {
             const MCU& cbcrBlock = image->blocks[y * image->blockWidthReal + x];
             
             // Replicate Cb/Cr values to all Y blocks in this MCU
-            for (uint v = 0; v < vSamp; ++v) {
-                for (uint h = 0; h < hSamp; ++h) {
+            // Use countdown loops to match master branch (unsigned integer underflow pattern)
+            for (uint v = vSamp - 1; v < vSamp; --v) {
+                for (uint h = hSamp - 1; h < hSamp; --h) {
                     MCU& yBlock = image->blocks[(y + v) * image->blockWidthReal + (x + h)];
                     
                     // Nearest-neighbor upsampling: replicate each Cb/Cr pixel
-                    for (uint py = 0; py < 8; ++py) {
-                        for (uint px = 0; px < 8; ++px) {
+                    // Use countdown loops for py and px to match master branch exactly
+                    for (uint py = 7; py < 8; --py) {
+                        for (uint px = 7; px < 8; --px) {
                             const uint pixel = py * 8 + px;
                             const uint cbcrPixelRow = py / vSamp + 4 * v;
                             const uint cbcrPixelColumn = px / hSamp + 4 * h;
