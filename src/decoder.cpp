@@ -1446,12 +1446,9 @@ void upsample(Header* const image) {
 
     const uint vSamp = image->verticalSamplingFactor;
     const uint hSamp = image->horizontalSamplingFactor;
-    
-    // If no subsampling (4:4:4), no upsampling needed
-    if (vSamp == 1 && hSamp == 1) {
-        return;
-    }
-    
+
+    std::cout << "Upsampling Cb/Cr with factors " << hSamp << "x" << vSamp << "...\n";
+        
     for (uint y = 0; y < image->blockHeight; y += vSamp) {
         for (uint x = 0; x < image->blockWidth; x += hSamp) {
             const MCU& cbcrBlock = image->blocks[y * image->blockWidthReal + x];
