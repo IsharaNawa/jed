@@ -1649,8 +1649,8 @@ int main(int argc, char** argv) {
         // Stage 7: Output
         const std::size_t pos = filename.find_last_of('.');
         const std::string outFilename = (pos == std::string::npos) ?
-            (filename + "_decoder_out.bmp") :
-            (filename.substr(0, pos) + "_decoder_out.bmp");
+            (filename + "_decoder_cpp_out.bmp") :
+            (filename.substr(0, pos) + "_decoder_cpp_out.bmp");
         writeBMP(image, outFilename);
 
         delete[] image->blocks;
