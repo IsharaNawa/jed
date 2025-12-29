@@ -69,7 +69,7 @@ BMPImage readBMP(const std::string& filename) {
     image.blockHeight = (image.height + 7) / 8;
     image.blockWidth = (image.width + 7) / 8;
 
-    image.blocks = new (std::nothrow) Block[image.blockHeight * image.blockWidth];
+    image.blocks = new (std::nothrow) MCU[image.blockHeight * image.blockWidth];
     if (image.blocks == nullptr) {
         std::cout << "Error - Memory error\n";
         inFile.close();
@@ -100,7 +100,7 @@ BMPImage readBMP(const std::string& filename) {
 }
 
 // convert all pixels in a block from RGB color space to YCbCr
-void RGBToYCbCrBlock(Block& block) {
+void RGBToYCbCrBlock(MCU& block) {
     for (uint y = 0; y < 8; ++y) {
         for (uint x = 0; x < 8; ++x) {
             const uint pixel = y * 8 + x;

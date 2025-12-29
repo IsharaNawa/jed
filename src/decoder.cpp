@@ -1,5 +1,6 @@
 #include <iostream>
 #include <fstream>
+#include <vector>
 
 #include "jpg.h"
 
@@ -98,8 +99,113 @@ public:
     }
 };
 
+// helper class to read bits from a memory buffer (stored entropy data)
+class BitReaderFromMemory {
+private:
+    byte nextByte = 0;
+    byte nextBit = 0;
+    const std::vector<byte>& data;
+    size_t position = 0;
+
+public:
+    BitReaderFromMemory(const std::vector<byte>& d) : data(d) {}
+
+    bool hasBits() {
+        return position < data.size();
+    }
+
+    byte readByte() {
+        nextBit = 0;
+        if (position < data.size()) {
+            return data[position++];
+        }
+        return 0;
+    }
+
+    uint readWord() {
+        nextBit = 0;
+        uint word = 0;
+        if (position < data.size()) {
+            word = data[position++] << 8;
+        }
+        if (position < data.size()) {
+            word += data[position++];
+        }
+        return word;
+    }
+
+    byte peekByte() {
+        if (position < data.size()) {
+            return data[position];
+        }
+        return 0;
+    }
+
+    // read one bit (0 or 1) or return -1 if all bits have already been read
+    uint readBit() {  
+        if (nextBit == 0) {
+            if (!hasBits()) {
+                return -1;
+            }
+            nextByte = readByte();
+            while (nextByte == 0xFF) {
+                if (!hasBits()) {
+                    return -1;
+                }
+                byte marker = peekByte();
+                // ignore multiple 0xFF's in a row
+                while (marker == 0xFF) {
+                    readByte();
+                    if (!hasBits()) {
+                        return -1;
+                    }
+                    marker = peekByte();
+                }
+                // literal 0xFF's are encoded in the bitstream as 0xFF00
+                if (marker == 0x00) {
+                    readByte();
+                    break;
+                }
+                // restart marker
+                else if (marker >= RST0 && marker <= RST7) {
+                    readByte();
+                    nextByte = readByte();
+                }
+                else {
+                    std::cout << "Error - Invalid marker: 0x" << std::hex << (uint)marker << std::dec << '\n';
+                    return -1;
+                }
+            }
+        }
+        uint bit = (nextByte >> (7 - nextBit)) & 1;
+        nextBit = (nextBit + 1) % 8;
+        return bit;
+    }
+
+    // read a variable number of bits
+    // first read bit is most significant bit
+    // return -1 if at any point all bits have already been read
+    uint readBits(const uint length) {
+        uint bits = 0;
+        for (uint i = 0; i < length; ++i) {
+            uint bit = readBit();
+            if (bit == -1) {
+                bits = -1;
+                break;
+            }
+            bits = (bits << 1) | bit;
+        }
+        return bits;
+    }
+
+    // advance to the 0th bit of the next byte
+    void align() {
+        nextBit = 0;
+    }
+};
+
 // SOF specifies frame type, dimensions, and number of color components
-void readStartOfFrame(BitReader& bitReader, JPGImage* const image) {
+void readStartOfFrame(BitReader& bitReader, Header* const image) {
     std::cout << "Reading SOF Marker\n";
     if (image->numComponents != 0) {
         std::cout << "Error - Multiple SOFs detected\n";
@@ -205,7 +311,7 @@ void readStartOfFrame(BitReader& bitReader, JPGImage* const image) {
 }
 
 // DQT contains one or more quantization tables
-void readQuantizationTable(BitReader& bitReader, JPGImage* const image) {
+void readQuantizationTable(BitReader& bitReader, Header* const image) {
     std::cout << "Reading DQT Marker\n";
     int length = bitReader.readWord();
     length -= 2;
@@ -257,7 +363,7 @@ void generateCodes(HuffmanTable& hTable) {
 }
 
 // DHT contains one or more Huffman tables
-void readHuffmanTable(BitReader& bitReader, JPGImage* const image) {
+void readHuffmanTable(BitReader& bitReader, Header* const image) {
     std::cout << "Reading DHT Marker\n";
     int length = bitReader.readWord();
     length -= 2;
@@ -307,7 +413,7 @@ void readHuffmanTable(BitReader& bitReader, JPGImage* const image) {
 }
 
 // SOS contains color component info for the next scan
-void readStartOfScan(BitReader& bitReader, JPGImage* const image) {
+void readStartOfScan(BitReader& bitReader, Header* const image) {
     std::cout << "Reading SOS Marker\n";
     if (image->numComponents == 0) {
         std::cout << "Error - SOS detected before SOF\n";
@@ -449,7 +555,7 @@ void readStartOfScan(BitReader& bitReader, JPGImage* const image) {
 }
 
 // restart interval is needed to stay synchronized during data scans
-void readRestartInterval(BitReader& bitReader, JPGImage* const image) {
+void readRestartInterval(BitReader& bitReader, Header* const image) {
     std::cout << "Reading DRI Marker\n";
     uint length = bitReader.readWord();
 
@@ -462,7 +568,7 @@ void readRestartInterval(BitReader& bitReader, JPGImage* const image) {
 }
 
 // APPNs simply get skipped based on length
-void readAPPN(BitReader& bitReader, JPGImage* const image) {
+void readAPPN(BitReader& bitReader, Header* const image) {
     std::cout << "Reading APPN Marker\n";
     uint length = bitReader.readWord();
     if (length < 2) {
@@ -477,7 +583,7 @@ void readAPPN(BitReader& bitReader, JPGImage* const image) {
 }
 
 // comments simply get skipped based on length
-void readComment(BitReader& bitReader, JPGImage* const image) {
+void readComment(BitReader& bitReader, Header* const image) {
     std::cout << "Reading COM Marker\n";
     uint length = bitReader.readWord();
     if (length < 2) {
@@ -492,7 +598,7 @@ void readComment(BitReader& bitReader, JPGImage* const image) {
 }
 
 // print all info extracted from the JPG file
-void printFrameInfo(const JPGImage* const image) {
+void printFrameInfo(const Header* const image) {
     if (image == nullptr) return;
     std::cout << "SOF=============\n";
     std::cout << "Frame Type: 0x" << std::hex << (uint)image->frameType << std::dec << '\n';
@@ -524,7 +630,7 @@ void printFrameInfo(const JPGImage* const image) {
 }
 
 // print info for the next scan
-void printScanInfo(const JPGImage* const image) {
+void printScanInfo(const Header* const image) {
     if (image == nullptr) return;
     std::cout << "SOS=============\n";
     std::cout << "Start of Selection: " << (uint)image->startOfSelection << '\n';
@@ -572,7 +678,7 @@ void printScanInfo(const JPGImage* const image) {
     std::cout << "Restart Interval: " << image->restartInterval << '\n';
 }
 
-void readFrameHeader(BitReader& bitReader, JPGImage* const image) {
+void readFrameHeader(BitReader& bitReader, Header* const image) {
     // first two bytes must be 0xFF, SOI
     byte last = bitReader.readByte();
     byte current = bitReader.readByte();
@@ -675,75 +781,25 @@ void readFrameHeader(BitReader& bitReader, JPGImage* const image) {
     }
 }
 
-void decodeHuffmanData(BitReader& bitReader, JPGImage* const image);
-
-void readScans(BitReader& bitReader, JPGImage* const image) {
-    // decode first scan
+void readScans(BitReader& bitReader, Header* const image) {
+    // read first scan header only - actual data decoding happens in huffmanDecoding stage
     readStartOfScan(bitReader, image);
     if (!image->valid) {
         return;
     }
     printScanInfo(image);
-    decodeHuffmanData(bitReader, image);
-
-    byte last = bitReader.readByte();
-    byte current = bitReader.readByte();
-
-    // decode additional scans, if any
-    while (image->valid) {
-        if (!bitReader.hasBits()) {
-            std::cout << "Error - File ended prematurely\n";
-            image->valid = false;
-            return;
-        }
-        if (last != 0xFF) {
-            std::cout << "Error - Expected a marker\n";
-            image->valid = false;
-            return;
-        }
-
-        // end of image
-        if (current == EOI) {
-            break;
-        }
-        // huffman tables (progressive only)
-        else if (current == DHT && image->frameType == SOF2) {
-            readHuffmanTable(bitReader, image);
-        }
-        // additional scans (progressive only)
-        else if (current == SOS && image->frameType == SOF2) {
-            readStartOfScan(bitReader, image);
-            if (!image->valid) {
-                return;
-            }
-            printScanInfo(image);
-            decodeHuffmanData(bitReader, image);
-        }
-        // new restart interval (progressive only)
-        else if (current == DRI && image->frameType == SOF2) {
-            readRestartInterval(bitReader, image);
-        }
-        // restart marker, perhaps from the very end of previous scan
-        else if (current >= RST0 && current <= RST7) {
-            // RSTN has no size
-        }
-        // ignore multiple 0xFF's in a row
-        else if (current == 0xFF) {
-            current = bitReader.readByte();
-            continue;
-        }
-        else {
-            std::cout << "Error - Invalid marker: 0x" << std::hex << (uint)current << std::dec << '\n';
-            image->valid = false;
-            return;
-        }
-        last = bitReader.readByte();
-        current = bitReader.readByte();
+    
+    // Read all remaining bytes (entropy-coded data + markers) for huffmanDecoding stage
+    // This avoids re-opening and re-parsing the file
+    while (bitReader.hasBits()) {
+        byte b = bitReader.readByte();
+        image->huffmanData.push_back(b);
     }
 }
 
-JPGImage* readJPG(const std::string& filename) {
-    // open file
+// Stage 1: Read JPEG - parse file headers and prepare for decoding
+Header* readJPEG(const std::string& filename) {
+
     std::cout << "Reading " << filename << "...\n";
     BitReader bitReader(filename);
     if (!bitReader.hasBits()) {
@@ -751,11 +807,13 @@ JPGImage* readJPG(const std::string& filename) {
         return nullptr;
     }
 
-    JPGImage* image = new (std::nothrow) JPGImage;
+    Header* image = new (std::nothrow) Header;
     if (image == nullptr) {
         std::cout << "Error - Memory error\n";
         return nullptr;
     }
+    
+    image->filename = filename;
 
     readFrameHeader(bitReader, image);
 
@@ -765,7 +823,7 @@ JPGImage* readJPG(const std::string& filename) {
 
     printFrameInfo(image);
 
-    image->blocks = new (std::nothrow) Block[image->blockHeightReal * image->blockWidthReal];
+    image->blocks = new (std::nothrow) MCU[image->blockHeightReal * image->blockWidthReal];
     if (image->blocks == nullptr) {
         std::cout << "Error - Memory error\n";
         image->valid = false;
@@ -778,8 +836,9 @@ JPGImage* readJPG(const std::string& filename) {
 }
 
 // return the symbol from the Huffman table that corresponds to
-//   the next Huffman code read from the BitReader
-byte getNextSymbol(BitReader& bitReader, const HuffmanTable& hTable) {
+//   the next Huffman code read from the BitReader (template to support both BitReader types)
+template<typename T>
+byte getNextSymbol(T& bitReader, const HuffmanTable& hTable) {
     uint currentCode = 0;
     for (uint i = 0; i < 16; ++i) {
         int bit = bitReader.readBit();
@@ -797,10 +856,11 @@ byte getNextSymbol(BitReader& bitReader, const HuffmanTable& hTable) {
 }
 
 // fill the coefficients of a block component based on Huffman codes
-//   read from the BitReader
+//   read from the BitReader (template to support both BitReader types)
+template<typename T>
 bool decodeBlockComponent(
-    const JPGImage* const image,
-    BitReader& bitReader,
+    const Header* const image,
+    T& bitReader,
     int* const component,
     int& previousDC,
     uint& skips,
@@ -1083,11 +1143,9 @@ bool decodeBlockComponent(
     }
 }
 
-// decode all the Huffman data and fill all MCUs
-void decodeHuffmanData(BitReader& bitReader, JPGImage* const image) {
-    int previousDCs[3] = { 0 };
-    uint skips = 0;
-
+// internal function to decode Huffman data for a single scan (template to support both BitReader types)
+template<typename T>
+void decodeHuffmanDataScan(T& bitReader, Header* const image, int* previousDCs, uint& skips) {
     const bool luminanceOnly = image->componentsInScan == 1 && image->colorComponents[0].usedInScan;
     const uint yStep = luminanceOnly ? 1 : image->verticalSamplingFactor;
     const uint xStep = luminanceOnly ? 1 : image->horizontalSamplingFactor;
@@ -1118,12 +1176,85 @@ void decodeHuffmanData(BitReader& bitReader, JPGImage* const image) {
                                     skips,
                                     image->huffmanDCTables[component.huffmanDCTableID],
                                     image->huffmanACTables[component.huffmanACTableID])) {
+                                image->valid = false;
                                 return;
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+// Stage 2: Huffman Decoding - decode all the Huffman data and fill all MCUs
+void huffmanDecoding(Header* const image) {
+
+    // Use the entropy data that was already read during readJPEG stage
+    // No need to re-open or re-parse the file!
+    BitReaderFromMemory bitReader(image->huffmanData);
+    
+    int previousDCs[3] = { 0 };
+    uint skips = 0;
+
+    // Decode the first scan
+    decodeHuffmanDataScan(bitReader, image, previousDCs, skips);
+    
+    if (!image->valid) {
+        return;
+    }
+
+    // Handle progressive JPEG with multiple scans
+    if (image->frameType == SOF2) {
+        byte last = bitReader.readByte();
+        byte current = bitReader.readByte();
+
+        while (image->valid && bitReader.hasBits()) {
+            if (last != 0xFF) {
+                std::cout << "Error - Expected a marker\n";
+                image->valid = false;
+                return;
+            }
+
+            if (current == EOI) {
+                break;
+            }
+            else if (current == DHT) {
+                // Skip DHT header
+                uint length = bitReader.readWord();
+                for (uint i = 0; i < length - 2; ++i) {
+                    bitReader.readByte();
+                }
+            }
+            else if (current == SOS) {
+                // Skip SOS header and decode next scan
+                uint length = bitReader.readWord();
+                for (uint i = 0; i < length - 2; ++i) {
+                    bitReader.readByte();
+                }
+                decodeHuffmanDataScan(bitReader, image, previousDCs, skips);
+            }
+            else if (current == DRI) {
+                uint length = bitReader.readWord();
+                for (uint i = 0; i < length - 2; ++i) {
+                    bitReader.readByte();
+                }
+            }
+            else if (current >= RST0 && current <= RST7) {
+                // RSTN has no size
+            }
+            else if (current == 0xFF) {
+                current = bitReader.readByte();
+                continue;
+            }
+            else {
+                std::cout << "Error - Invalid marker during Huffman decoding: 0x" << std::hex << (uint)current << std::dec << '\n';
+                image->valid = false;
+                return;
+            }
+            
+            last = bitReader.readByte();
+            current = bitReader.readByte();
         }
     }
 }
@@ -1136,7 +1267,7 @@ void dequantizeBlockComponent(const QuantizationTable& qTable, int* const compon
 }
 
 // dequantize all MCUs
-void dequantize(const JPGImage* const image) {
+void dequantize(const Header* const image) {
     for (uint y = 0; y < image->blockHeight; y += image->verticalSamplingFactor) {
         for (uint x = 0; x < image->blockWidth; x += image->horizontalSamplingFactor) {
             for (uint i = 0; i < image->numComponents; ++i) {
@@ -1295,7 +1426,7 @@ void inverseDCTBlockComponent(int* const component) {
 }
 
 // perform IDCT on all MCUs
-void inverseDCT(const JPGImage* const image) {
+void inverseDCT(const Header* const image) {
     for (uint y = 0; y < image->blockHeight; y += image->verticalSamplingFactor) {
         for (uint x = 0; x < image->blockWidth; x += image->horizontalSamplingFactor) {
             for (uint i = 0; i < image->numComponents; ++i) {
@@ -1310,8 +1441,66 @@ void inverseDCT(const JPGImage* const image) {
     }
 }
 
-// convert all pixels in a block from YCbCr color space to RGB
-void YCbCrToRGBBlock(Block& yBlock, const Block& cbcrBlock, const uint vSamp, const uint hSamp, const uint v, const uint h) {
+// Stage 5: Upsampling - upsample chrominance components using nearest-neighbor
+void upsample(Header* const image) {
+
+    const uint vSamp = image->verticalSamplingFactor;
+    const uint hSamp = image->horizontalSamplingFactor;
+    
+    // If no subsampling (4:4:4), no upsampling needed
+    if (vSamp == 1 && hSamp == 1) {
+        return;
+    }
+    
+    for (uint y = 0; y < image->blockHeight; y += vSamp) {
+        for (uint x = 0; x < image->blockWidth; x += hSamp) {
+            const MCU& cbcrBlock = image->blocks[y * image->blockWidthReal + x];
+            
+            // Replicate Cb/Cr values to all Y blocks in this MCU
+            for (uint v = 0; v < vSamp; ++v) {
+                for (uint h = 0; h < hSamp; ++h) {
+                    MCU& yBlock = image->blocks[(y + v) * image->blockWidthReal + (x + h)];
+                    
+                    // Nearest-neighbor upsampling: replicate each Cb/Cr pixel
+                    for (uint py = 0; py < 8; ++py) {
+                        for (uint px = 0; px < 8; ++px) {
+                            const uint pixel = py * 8 + px;
+                            const uint cbcrPixelRow = py / vSamp + 4 * v;
+                            const uint cbcrPixelColumn = px / hSamp + 4 * h;
+                            const uint cbcrPixel = cbcrPixelRow * 8 + cbcrPixelColumn;
+                            
+                            yBlock.cb[pixel] = cbcrBlock.cb[cbcrPixel];
+                            yBlock.cr[pixel] = cbcrBlock.cr[cbcrPixel];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// convert a single block from YCbCr color space to RGB
+void YCbCrToRGBBlock(MCU& block) {
+    for (uint i = 0; i < 64; ++i) {
+        int r = block.y[i]                            + 1.402f * block.cr[i] + 128;
+        int g = block.y[i] - 0.344f * block.cb[i] - 0.714f * block.cr[i] + 128;
+        int b = block.y[i] + 1.772f * block.cb[i]                        + 128;
+        
+        if (r < 0)   r = 0;
+        if (r > 255) r = 255;
+        if (g < 0)   g = 0;
+        if (g > 255) g = 255;
+        if (b < 0)   b = 0;
+        if (b > 255) b = 255;
+        
+        block.r[i] = r;
+        block.g[i] = g;
+        block.b[i] = b;
+    }
+}
+
+// OLD function - kept for reference but not used
+void YCbCrToRGBBlock_old(MCU& yBlock, const MCU& cbcrBlock, const uint vSamp, const uint hSamp, const uint v, const uint h) {
     for (uint y = 7; y < 8; --y) {
         for (uint x = 7; x < 8; --x) {
             const uint pixel = y * 8 + x;
@@ -1334,19 +1523,12 @@ void YCbCrToRGBBlock(Block& yBlock, const Block& cbcrBlock, const uint vSamp, co
     }
 }
 
-// convert all pixels from YCbCr color space to RGB
-void YCbCrToRGB(const JPGImage* const image) {
-    const uint vSamp = image->verticalSamplingFactor;
-    const uint hSamp = image->horizontalSamplingFactor;
-    for (uint y = 0; y < image->blockHeight; y += vSamp) {
-        for (uint x = 0; x < image->blockWidth; x += hSamp) {
-            const Block& cbcrBlock = image->blocks[y * image->blockWidthReal + x];
-            for (uint v = vSamp - 1; v < vSamp; --v) {
-                for (uint h = hSamp - 1; h < hSamp; --h) {
-                    Block& yBlock = image->blocks[(y + v) * image->blockWidthReal + (x + h)];
-                    YCbCrToRGBBlock(yBlock, cbcrBlock, vSamp, hSamp, v, h);
-                }
-            }
+// Stage 6: Color Space Conversion - convert all pixels from YCbCr to RGB
+void colorSpaceConversion(const Header* const image) {
+    for (uint y = 0; y < image->blockHeight; ++y) {
+        for (uint x = 0; x < image->blockWidth; ++x) {
+            MCU& block = image->blocks[y * image->blockWidthReal + x];
+            YCbCrToRGBBlock(block);
         }
     }
 }
@@ -1366,7 +1548,7 @@ void putShort(byte*& bufferPos, const uint v) {
 }
 
 // write all the pixels in the MCUs to a BMP file
-void writeBMP(const JPGImage* const image, const std::string& filename) {
+void writeBMP(const Header* const image, const std::string& filename) {
     // open file
     std::cout << "Writing " << filename << "...\n";
     std::ofstream outFile(filename, std::ios::out | std::ios::binary);
@@ -1429,8 +1611,8 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string filename(argv[i]);
 
-        // read image
-        JPGImage* image = readJPG(filename);
+        // Stage 1: Read JPEG
+        Header* image = readJPEG(filename);      
         // validate image
         if (image == nullptr) {
             continue;
@@ -1445,20 +1627,31 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // dequantize DCT coefficients
+        // Stage 2: Huffman Decoding
+        huffmanDecoding(image);
+        if (image->valid == false) {
+            delete[] image->blocks;
+            delete image;
+            continue;
+        }
+
+        // Stage 3: Dequantization
         dequantize(image);
 
-        // Inverse Discrete Cosine Transform
+        // Stage 4: Inverse DCT
         inverseDCT(image);
 
-        // color conversion
-        YCbCrToRGB(image);
+        // Stage 5: Upsampling
+        upsample(image);
 
-        // write BMP file
+        // Stage 6: Color Space Conversion
+        colorSpaceConversion(image);
+
+        // Stage 7: Output
         const std::size_t pos = filename.find_last_of('.');
         const std::string outFilename = (pos == std::string::npos) ?
-            (filename + ".bmp") :
-            (filename.substr(0, pos) + ".bmp");
+            (filename + "_decoder_out.bmp") :
+            (filename.substr(0, pos) + "_decoder_out.bmp");
         writeBMP(image, outFilename);
 
         delete[] image->blocks;

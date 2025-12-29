@@ -3,9 +3,15 @@
 
 #define _USE_MATH_DEFINES
 #include <cmath>
+#include <vector>
+#include <string>
 
 typedef unsigned char byte;
 typedef unsigned int uint;
+
+///////////////////////////////////////////////////
+//  Start : JPEG Marker Definitions
+///////////////////////////////////////////////////
 
 // Start of Frame markers, non-differential, Huffman coding
 const byte SOF0 = 0xC0; // Baseline DCT
@@ -93,17 +99,37 @@ const byte JPG13 = 0xFD;
 const byte COM = 0xFE;
 const byte TEM = 0x01;
 
-struct QuantizationTable {
-    uint table[64] = { 0 };
-    bool set = false;
-};
+///////////////////////////////////////////////////
+//  End : JPEG Marker Definitions
+///////////////////////////////////////////////////
 
+//////////////////////////////////////////////////
+// Start Stage 2 : Huffman Decoding Structures
+//////////////////////////////////////////////////
 struct HuffmanTable {
     byte offsets[17] = { 0 };
     byte symbols[176] = { 0 };
     uint codes[176] = { 0 };
     bool set = false;
 };
+
+//////////////////////////////////////////////////
+// End Stage 2 : Huffman Decoding Structures
+//////////////////////////////////////////////////
+
+//////////////////////////////////////////////////
+// Start Stage 3 : Dequantization Structures
+//////////////////////////////////////////////////
+
+struct QuantizationTable {
+    uint table[64] = { 0 };
+    bool set = false;
+};
+
+//////////////////////////////////////////////////
+// End Stage 3 : Dequantization Structures
+//////////////////////////////////////////////////
+
 
 struct ColorComponent {
     byte horizontalSamplingFactor = 0;
@@ -115,7 +141,7 @@ struct ColorComponent {
     bool usedInScan = false;
 };
 
-struct Block {
+struct MCU {
     union {
         int y[64] = { 0 };
         int r[64];
@@ -142,7 +168,7 @@ struct Block {
     }
 };
 
-struct JPGImage {
+struct Header {
     QuantizationTable quantizationTables[4];
     HuffmanTable huffmanDCTables[4];
     HuffmanTable huffmanACTables[4];
@@ -162,7 +188,7 @@ struct JPGImage {
 
     uint restartInterval = 0;
 
-    Block* blocks = nullptr;
+    MCU* blocks = nullptr;
 
     bool valid = true;
 
@@ -173,13 +199,16 @@ struct JPGImage {
 
     byte horizontalSamplingFactor = 0;
     byte verticalSamplingFactor = 0;
+    
+    std::string filename = "";
+    std::vector<byte> huffmanData;  // Stores the entropy-coded segment
 };
 
 struct BMPImage {
     uint height = 0;
     uint width = 0;
 
-    Block* blocks = nullptr;
+    MCU* blocks = nullptr;
 
     uint blockHeight = 0;
     uint blockWidth = 0;
