@@ -455,13 +455,33 @@ bool encodeBlockComponent(
     return true;
 }
 
-// encode all the Huffman data from all MCUs
-std::vector<byte> encodeHuffmanData(const BMPImage& image) {
+// internal function to encode Huffman data for a single scan
+bool encodeHuffmanDataScan(BitWriter& bitWriter, const BMPImage& image, int* previousDCs) {
+    for (uint y = 0; y < image.blockHeight; ++y) {
+        for (uint x = 0; x < image.blockWidth; ++x) {
+            for (uint i = 0; i < 3; ++i) {
+                if (!encodeBlockComponent(
+                        bitWriter,
+                        image.blocks[y * image.blockWidth + x][i],
+                        previousDCs[i],
+                        *dcTables[i],
+                        *acTables[i])) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// Stage 5: Huffman Encoding - encode all the Huffman data from all MCUs
+std::vector<byte> huffmanEncoding(const BMPImage& image) {
     std::vector<byte> huffmanData;
     BitWriter bitWriter(huffmanData);
 
     int previousDCs[3] = { 0 };
 
+    // Generate Huffman codes for all tables (if not already generated)
     for (uint i = 0; i < 3; ++i) {
         if (!dcTables[i]->set) {
             generateCodes(*dcTables[i]);
@@ -473,19 +493,9 @@ std::vector<byte> encodeHuffmanData(const BMPImage& image) {
         }
     }
 
-    for (uint y = 0; y < image.blockHeight; ++y) {
-        for (uint x = 0; x < image.blockWidth; ++x) {
-            for (uint i = 0; i < 3; ++i) {
-                if (!encodeBlockComponent(
-                        bitWriter,
-                        image.blocks[y * image.blockWidth + x][i],
-                        previousDCs[i],
-                        *dcTables[i],
-                        *acTables[i])) {
-                    return std::vector<byte>();
-                }
-            }
-        }
+    // Encode the scan
+    if (!encodeHuffmanDataScan(bitWriter, image, previousDCs)) {
+        return std::vector<byte>();
     }
 
     return huffmanData;
@@ -569,9 +579,10 @@ void writeAPP0(std::ofstream& outFile) {
     outFile.put(0);
 }
 
-void writeJPG(const BMPImage& image, const std::string& filename) {
-    std::vector<byte> huffmanData = encodeHuffmanData(image);
+// Stage 6: Write JPG - write the JPEG file
+void writeJPG(const BMPImage& image, const std::vector<byte>& huffmanData, const std::string& filename) {
     if (huffmanData.size() == 0) {
+        std::cout << "Error - No Huffman data to write\n";
         return;
     }
 
@@ -626,28 +637,35 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string filename(argv[i]);
 
-        // read image
+        // Stage 1: Read BMP image
         BMPImage image = readBMP(filename);
         // validate image
         if (image.blocks == nullptr) {
             continue;
         }
 
-        // color conversion
+        // Stage 2: Color Conversion
         RGBToYCbCr(image);
 
-        // Forward Discrete Cosine Transform
+        // Stage 3: Forward Discrete Cosine Transform
         forwardDCT(image);
 
-        // quantize DCT coefficients
+        // Stage 4: Quantize DCT coefficients
         quantize(image);
 
-        // write JPG file
+        // Stage 5: Huffman Encoding
+        std::vector<byte> huffmanData = huffmanEncoding(image);
+        if (huffmanData.size() == 0) {
+            delete[] image.blocks;
+            continue;
+        }
+
+        // Stage 6: Write JPG file
         const std::size_t pos = filename.find_last_of('.');
         const std::string outFilename = (pos == std::string::npos) ?
-            (filename + ".jpg") :
-            (filename.substr(0, pos) + ".jpg");
-        writeJPG(image, outFilename);
+            (filename + "_encoder_out.jpg") :
+            (filename.substr(0, pos) + "_encoder_out.jpg");
+        writeJPG(image, huffmanData, outFilename);
 
         delete[] image.blocks;
     }
