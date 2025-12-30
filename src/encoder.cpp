@@ -101,21 +101,21 @@ BMPImage readBMP(const std::string& filename) {
 
 // convert all pixels in a block from RGB color space to YCbCr
 void RGBToYCbCrBlock(MCU& block) {
-    for (uint y = 0; y < 8; ++y) {
-        for (uint x = 0; x < 8; ++x) {
-            const uint pixel = y * 8 + x;
-            int y  =  0.2990 * block.r[pixel] + 0.5870 * block.g[pixel] + 0.1140 * block.b[pixel] - 128;
-            int cb = -0.1687 * block.r[pixel] - 0.3313 * block.g[pixel] + 0.5000 * block.b[pixel];
-            int cr =  0.5000 * block.r[pixel] - 0.4187 * block.g[pixel] - 0.0813 * block.b[pixel];
-            if (y  < -128) y  = -128;
-            if (y  >  127) y  =  127;
-            if (cb < -128) cb = -128;
-            if (cb >  127) cb =  127;
-            if (cr < -128) cr = -128;
-            if (cr >  127) cr =  127;
-            block.y[pixel]  = y;
-            block.cb[pixel] = cb;
-            block.cr[pixel] = cr;
+    for (uint py = 0; py < 8; ++py) {
+        for (uint px = 0; px < 8; ++px) {
+            const uint pixel = py * 8 + px;
+            int yVal  =  0.2990 * block.r[pixel] + 0.5870 * block.g[pixel] + 0.1140 * block.b[pixel] - 128;
+            int cbVal = -0.1687 * block.r[pixel] - 0.3313 * block.g[pixel] + 0.5000 * block.b[pixel];
+            int crVal =  0.5000 * block.r[pixel] - 0.4187 * block.g[pixel] - 0.0813 * block.b[pixel];
+            if (yVal  < -128) yVal  = -128;
+            if (yVal  >  127) yVal  =  127;
+            if (cbVal < -128) cbVal = -128;
+            if (cbVal >  127) cbVal =  127;
+            if (crVal < -128) crVal = -128;
+            if (crVal >  127) crVal =  127;
+            block.y[pixel]  = yVal;
+            block.cb[pixel] = cbVal;
+            block.cr[pixel] = crVal;
         }
     }
 }
