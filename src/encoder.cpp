@@ -129,6 +129,68 @@ void RGBToYCbCr(const BMPImage& image) {
     }
 }
 
+// Stage 2.5: Downsample - downsample chrominance components using nearest-neighbor
+// This is the inverse of the decoder's upsampling
+void downsample(BMPImage& image, Header& ctx) {
+    const uint vSamp = ctx.verticalSamplingFactor;
+    const uint hSamp = ctx.horizontalSamplingFactor;
+
+    std::cout << "Downsampling Cb/Cr with factors " << hSamp << "x" << vSamp << "...\n";
+
+    // Calculate real block dimensions (padded to sampling factor multiples)
+    ctx.blockHeightReal = (image.blockHeight + vSamp - 1) / vSamp * vSamp;
+    ctx.blockWidthReal = (image.blockWidth + hSamp - 1) / hSamp * hSamp;
+
+    // If we need more blocks, reallocate
+    if (ctx.blockHeightReal != image.blockHeight || ctx.blockWidthReal != image.blockWidth) {
+        MCU* newBlocks = new (std::nothrow) MCU[ctx.blockHeightReal * ctx.blockWidthReal];
+        if (newBlocks == nullptr) {
+            std::cout << "Error - Memory error during downsampling\n";
+            return;
+        }
+        // Copy existing blocks
+        for (uint y = 0; y < image.blockHeight; ++y) {
+            for (uint x = 0; x < image.blockWidth; ++x) {
+                newBlocks[y * ctx.blockWidthReal + x] = image.blocks[y * image.blockWidth + x];
+            }
+        }
+        delete[] image.blocks;
+        image.blocks = newBlocks;
+    }
+
+    // Downsample: collect Cb/Cr values from multiple blocks into the top-left block of each MCU group
+    // For 1x1 sampling, this simply copies values (no actual downsampling)
+    for (uint y = 0; y < ctx.blockHeightReal; y += vSamp) {
+        for (uint x = 0; x < ctx.blockWidthReal; x += hSamp) {
+            MCU& cbcrBlock = image.blocks[y * ctx.blockWidthReal + x];
+            
+            // For each pixel in the destination Cb/Cr block
+            for (uint py = 0; py < 8; ++py) {
+                for (uint px = 0; px < 8; ++px) {
+                    const uint dstPixel = py * 8 + px;
+                    
+                    // Calculate which source block and pixel this comes from
+                    // This is the inverse of the decoder's upsampling formula
+                    const uint srcBlockV = py / (8 / vSamp);
+                    const uint srcBlockH = px / (8 / hSamp);
+                    const uint srcPixelRow = (py % (8 / vSamp)) * vSamp;
+                    const uint srcPixelCol = (px % (8 / hSamp)) * hSamp;
+                    const uint srcPixel = srcPixelRow * 8 + srcPixelCol;
+                    
+                    // Get source block (clamped to valid range)
+                    const uint srcY = y + srcBlockV;
+                    const uint srcX = x + srcBlockH;
+                    if (srcY < ctx.blockHeightReal && srcX < ctx.blockWidthReal) {
+                        const MCU& srcBlock = image.blocks[srcY * ctx.blockWidthReal + srcX];
+                        cbcrBlock.cb[dstPixel] = srcBlock.cb[srcPixel];
+                        cbcrBlock.cr[dstPixel] = srcBlock.cr[srcPixel];
+                    }
+                }
+            }
+        }
+    }
+}
+
 // perform 1-D FDCT on all columns and rows of a block component
 //   resulting in 2-D FDCT
 void forwardDCTBlockComponent(int* const component) {
@@ -285,11 +347,11 @@ void forwardDCTBlockComponent(int* const component) {
 }
 
 // perform FDCT on all MCUs
-void forwardDCT(const BMPImage& image) {
-    for (uint y = 0; y < image.blockHeight; ++y) {
-        for (uint x = 0; x < image.blockWidth; ++x) {
+void forwardDCT(const BMPImage& image, const Header& ctx) {
+    for (uint y = 0; y < ctx.blockHeightReal; ++y) {
+        for (uint x = 0; x < ctx.blockWidthReal; ++x) {
             for (uint i = 0; i < 3; ++i) {
-                forwardDCTBlockComponent(image.blocks[y * image.blockWidth + x][i]);
+                forwardDCTBlockComponent(image.blocks[y * ctx.blockWidthReal + x][i]);
             }
         }
     }
@@ -303,11 +365,11 @@ void quantizeBlockComponent(const QuantizationTable& qTable, int* const componen
 }
 
 // quantize all MCUs
-void quantize(const BMPImage& image) {
-    for (uint y = 0; y < image.blockHeight; ++y) {
-        for (uint x = 0; x < image.blockWidth; ++x) {
+void quantize(const BMPImage& image, const Header& ctx) {
+    for (uint y = 0; y < ctx.blockHeightReal; ++y) {
+        for (uint x = 0; x < ctx.blockWidthReal; ++x) {
             for (uint i = 0; i < 3; ++i) {
-                quantizeBlockComponent(*qTables100[i], image.blocks[y * image.blockWidth + x][i]);
+                quantizeBlockComponent(*qTables100[i], image.blocks[y * ctx.blockWidthReal + x][i]);
             }
         }
     }
@@ -456,18 +518,49 @@ bool encodeBlockComponent(
 }
 
 // internal function to encode Huffman data for a single scan
-bool encodeHuffmanDataScan(BitWriter& bitWriter, const BMPImage& image, int* previousDCs) {
-    for (uint y = 0; y < image.blockHeight; ++y) {
-        for (uint x = 0; x < image.blockWidth; ++x) {
-            for (uint i = 0; i < 3; ++i) {
-                if (!encodeBlockComponent(
-                        bitWriter,
-                        image.blocks[y * image.blockWidth + x][i],
-                        previousDCs[i],
-                        *dcTables[i],
-                        *acTables[i])) {
-                    return false;
+bool encodeHuffmanDataScan(BitWriter& bitWriter, const BMPImage& image, const Header& ctx, int* previousDCs) {
+    const uint vSamp = ctx.verticalSamplingFactor;
+    const uint hSamp = ctx.horizontalSamplingFactor;
+    
+    // Iterate through MCU groups
+    for (uint y = 0; y < ctx.blockHeightReal; y += vSamp) {
+        for (uint x = 0; x < ctx.blockWidthReal; x += hSamp) {
+            // Encode all Y blocks in this MCU group
+            for (uint v = 0; v < vSamp; ++v) {
+                for (uint h = 0; h < hSamp; ++h) {
+                    const uint blockY = y + v;
+                    const uint blockX = x + h;
+                    if (blockY < ctx.blockHeightReal && blockX < ctx.blockWidthReal) {
+                        if (!encodeBlockComponent(
+                                bitWriter,
+                                image.blocks[blockY * ctx.blockWidthReal + blockX][0], // Y component
+                                previousDCs[0],
+                                *dcTables[0],
+                                *acTables[0])) {
+                            return false;
+                        }
+                    }
                 }
+            }
+            
+            // Encode Cb block (from top-left block of MCU group)
+            if (!encodeBlockComponent(
+                    bitWriter,
+                    image.blocks[y * ctx.blockWidthReal + x][1], // Cb component
+                    previousDCs[1],
+                    *dcTables[1],
+                    *acTables[1])) {
+                return false;
+            }
+            
+            // Encode Cr block (from top-left block of MCU group)
+            if (!encodeBlockComponent(
+                    bitWriter,
+                    image.blocks[y * ctx.blockWidthReal + x][2], // Cr component
+                    previousDCs[2],
+                    *dcTables[2],
+                    *acTables[2])) {
+                return false;
             }
         }
     }
@@ -475,7 +568,7 @@ bool encodeHuffmanDataScan(BitWriter& bitWriter, const BMPImage& image, int* pre
 }
 
 // Stage 5: Huffman Encoding - encode all the Huffman data from all MCUs
-std::vector<byte> huffmanEncoding(const BMPImage& image) {
+std::vector<byte> huffmanEncoding(const BMPImage& image, const Header& ctx) {
     std::vector<byte> huffmanData;
     BitWriter bitWriter(huffmanData);
 
@@ -494,7 +587,7 @@ std::vector<byte> huffmanEncoding(const BMPImage& image) {
     }
 
     // Encode the scan
-    if (!encodeHuffmanDataScan(bitWriter, image, previousDCs)) {
+    if (!encodeHuffmanDataScan(bitWriter, image, ctx, previousDCs)) {
         return std::vector<byte>();
     }
 
@@ -517,7 +610,7 @@ void writeQuantizationTable(std::ofstream& outFile, byte tableID, const Quantiza
     }
 }
 
-void writeStartOfFrame(std::ofstream& outFile, const BMPImage& image) {
+void writeStartOfFrame(std::ofstream& outFile, const BMPImage& image, const Header& ctx) {
     outFile.put(0xFF);
     outFile.put(SOF0);
     putShort(outFile, 17);
@@ -527,7 +620,12 @@ void writeStartOfFrame(std::ofstream& outFile, const BMPImage& image) {
     outFile.put(3);
     for (uint i = 1; i <= 3; ++i) {
         outFile.put(i);
-        outFile.put(0x11);
+        // Y component gets the full sampling factor, Cb/Cr get 1x1
+        if (i == 1) {
+            outFile.put((ctx.horizontalSamplingFactor << 4) | ctx.verticalSamplingFactor);
+        } else {
+            outFile.put(0x11); // 1x1 for Cb and Cr
+        }
         outFile.put(i == 1 ? 0 : 1);
     }
 }
@@ -580,7 +678,7 @@ void writeAPP0(std::ofstream& outFile) {
 }
 
 // Stage 6: Write JPG - write the JPEG file
-void writeJPG(const BMPImage& image, const std::vector<byte>& huffmanData, const std::string& filename) {
+void writeJPG(const BMPImage& image, const Header& ctx, const std::vector<byte>& huffmanData, const std::string& filename) {
     if (huffmanData.size() == 0) {
         std::cout << "Error - No Huffman data to write\n";
         return;
@@ -606,7 +704,7 @@ void writeJPG(const BMPImage& image, const std::vector<byte>& huffmanData, const
     writeQuantizationTable(outFile, 1, qTableCbCr100);
 
     // SOF
-    writeStartOfFrame(outFile, image);
+    writeStartOfFrame(outFile, image, ctx);
 
     // DHT
     writeHuffmanTable(outFile, 0, 0, hDCTableY);
@@ -630,11 +728,33 @@ void writeJPG(const BMPImage& image, const std::vector<byte>& huffmanData, const
 int main(int argc, char** argv) {
     // validate arguments
     if (argc < 2) {
-        std::cout << "Error - Invalid arguments\n";
+        std::cout << "Usage: encoder <bmp_file> [sampling]\n";
+        std::cout << "  sampling: 1x1, 2x1, 1x2, or 2x2 (default: 1x1)\n";
         return 1;
     }
 
-    for (int i = 1; i < argc; ++i) {
+    // Parse sampling factor from command line (default 1x1)
+    byte hSamp = 1, vSamp = 1;
+    if (argc >= 3) {
+        std::string sampArg(argv[argc - 1]);
+        if (sampArg == "2x1") {
+            hSamp = 2; vSamp = 1;
+        } else if (sampArg == "1x2") {
+            hSamp = 1; vSamp = 2;
+        } else if (sampArg == "2x2") {
+            hSamp = 2; vSamp = 2;
+        } else if (sampArg != "1x1") {
+            // Not a sampling argument, treat as filename
+            hSamp = 1; vSamp = 1;
+        }
+    }
+
+    int numFiles = (argc >= 3 && (std::string(argv[argc - 1]) == "1x1" || 
+                                   std::string(argv[argc - 1]) == "2x1" || 
+                                   std::string(argv[argc - 1]) == "1x2" || 
+                                   std::string(argv[argc - 1]) == "2x2")) ? argc - 2 : argc - 1;
+
+    for (int i = 1; i <= numFiles; ++i) {
         const std::string filename(argv[i]);
 
         // Stage 1: Read BMP image
@@ -644,17 +764,25 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        // Create encoder context with sampling factors
+        Header ctx;
+        ctx.horizontalSamplingFactor = hSamp;
+        ctx.verticalSamplingFactor = vSamp;
+
         // Stage 2: Color Conversion
         RGBToYCbCr(image);
 
+        // Stage 2.5: Downsample
+        downsample(image, ctx);
+
         // Stage 3: Forward Discrete Cosine Transform
-        forwardDCT(image);
+        forwardDCT(image, ctx);
 
         // Stage 4: Quantize DCT coefficients
-        quantize(image);
+        quantize(image, ctx);
 
         // Stage 5: Huffman Encoding
-        std::vector<byte> huffmanData = huffmanEncoding(image);
+        std::vector<byte> huffmanData = huffmanEncoding(image, ctx);
         if (huffmanData.size() == 0) {
             delete[] image.blocks;
             continue;
@@ -665,7 +793,7 @@ int main(int argc, char** argv) {
         const std::string outFilename = (pos == std::string::npos) ?
             (filename + "_encoder_out.jpg") :
             (filename.substr(0, pos) + "_encoder_out.jpg");
-        writeJPG(image, huffmanData, outFilename);
+        writeJPG(image, ctx, huffmanData, outFilename);
 
         delete[] image.blocks;
     }
