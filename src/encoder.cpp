@@ -791,8 +791,8 @@ int main(int argc, char** argv) {
         // Stage 6: Write JPG file
         const std::size_t pos = filename.find_last_of('.');
         const std::string outFilename = (pos == std::string::npos) ?
-            (filename + "_encoder_out.jpg") :
-            (filename.substr(0, pos) + "_encoder_out.jpg");
+            (filename + "_encoder_cpp_out.jpg") :
+            (filename.substr(0, pos) + "_encoder_cpp_out.jpg");
         writeJPG(image, ctx, huffmanData, outFilename);
 
         delete[] image.blocks;
