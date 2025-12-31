@@ -1401,6 +1401,8 @@ int main(int argc, char** argv) {
             total_time += stage_times[j];
         }
         
+        uint totalMCUs = image->blockHeightReal * image->blockWidthReal;
+        printf("\nTotal MCUs processed: %u\n", totalMCUs);
         printf("\n=== Decoder Timing Statistics ===\n");
         printf("Stage 1 (Read JPEG):           %8.4f ms\n", stage_times[0] * 1000);
         printf("Stage 2 (Huffman Decoding):    %8.4f ms\n", stage_times[1] * 1000);

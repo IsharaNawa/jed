@@ -900,6 +900,8 @@ int main(int argc, char** argv) {
             total_time += stage_times[j];
         }
         
+        uint totalMCUs = ctx.blockHeightReal * ctx.blockWidthReal;
+        printf("\nTotal MCUs processed: %u\n", totalMCUs);
         printf("\n=== Encoder Timing Statistics ===\n");
         printf("Stage 1 (Read BMP):            %8.4f ms\n", stage_times[0] * 1000);
         printf("Stage 2 (Color Conversion):    %8.4f ms\n", stage_times[1] * 1000);
