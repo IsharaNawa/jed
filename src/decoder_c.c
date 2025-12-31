@@ -1,6 +1,8 @@
+#define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "jpg_c.h"
 
 /* ByteArray implementation */
@@ -1343,9 +1345,18 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         const char* filename = argv[i];
+        
+        struct timespec start, end;
+        double stage_times[7] = {0};
+        double total_time = 0;
+        
+        clock_gettime(CLOCK_MONOTONIC, &start);
 
         /* Stage 1: Read JPEG */
         Header* image = readJPEG(filename);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[0] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        
         if (image == NULL) {
             continue;
         }
@@ -1358,25 +1369,44 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 2: Huffman Decoding */
         huffmanDecoding(image);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[1] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[1] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        
         if (!image->valid) {
             freeHeader(image);
             continue;
         }
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 3: Dequantization */
         dequantize(image);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[2] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 4: Inverse DCT */
         inverseDCT(image);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[3] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 5: Upsampling */
         upsample(image);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[4] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 6: Color Space Conversion */
         colorSpaceConversion(image);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[5] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 7: Output */
         const char* dot = strrchr(filename, '.');
         char* outFilename;
@@ -1391,7 +1421,27 @@ int main(int argc, char** argv) {
         }
         
         writeBMP(image, outFilename);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[6] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
         free(outFilename);
+
+        /* Calculate and print timing statistics */
+        total_time = 0;
+        for (int j = 0; j < 7; j++) {
+            total_time += stage_times[j];
+        }
+        
+        printf("\n=== Decoder Timing Statistics ===\n");
+        printf("Stage 1 (Read JPEG):           %8.4f ms\n", stage_times[0] * 1000);
+        printf("Stage 2 (Huffman Decoding):    %8.4f ms\n", stage_times[1] * 1000);
+        printf("Stage 3 (Dequantization):      %8.4f ms\n", stage_times[2] * 1000);
+        printf("Stage 4 (Inverse DCT):         %8.4f ms\n", stage_times[3] * 1000);
+        printf("Stage 5 (Upsampling):          %8.4f ms\n", stage_times[4] * 1000);
+        printf("Stage 6 (Color Conversion):    %8.4f ms\n", stage_times[5] * 1000);
+        printf("Stage 7 (Write BMP):           %8.4f ms\n", stage_times[6] * 1000);
+        printf("----------------------------------\n");
+        printf("Total Time:                    %8.4f ms\n", total_time * 1000);
+        printf("==================================\n\n");
 
         freeHeader(image);
     }

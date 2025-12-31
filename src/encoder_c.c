@@ -1,7 +1,9 @@
+#define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include "jpg_c.h"
 
 /* ByteArray implementation */
@@ -952,9 +954,18 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i <= numFiles; ++i) {
         const char* filename = argv[i];
+        
+        struct timespec start, end;
+        double stage_times[7] = {0};
+        double total_time = 0;
+        
+        clock_gettime(CLOCK_MONOTONIC, &start);
 
         /* Stage 1: Read BMP image */
         BMPImage image = readBMP(filename);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[0] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        
         /* validate image */
         if (image.blocks == NULL) {
             continue;
@@ -967,25 +978,42 @@ int main(int argc, char** argv) {
         ctx.verticalSamplingFactor = vSamp;
         ctx.valid = 1;
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 2: Color Conversion */
         RGBToYCbCr(&image);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[1] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 2.5: Downsample */
         downsample(&image, &ctx);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[2] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 3: Forward Discrete Cosine Transform */
         forwardDCT(&image, &ctx);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[3] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 4: Quantize DCT coefficients */
         quantize(&image, &ctx);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[4] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 5: Huffman Encoding */
         ByteArray huffmanData = huffmanEncoding(&image, &ctx);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[5] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        
         if (huffmanData.size == 0) {
             free(image.blocks);
             continue;
         }
 
+        clock_gettime(CLOCK_MONOTONIC, &start);
         /* Stage 6: Write JPG file */
         /* Construct output filename */
         char outFilename[512];
@@ -1000,6 +1028,26 @@ int main(int argc, char** argv) {
             strcat(outFilename, "_encoder_c_out.jpg");
         }
         writeJPG(&image, &ctx, &huffmanData, outFilename);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        stage_times[6] = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+
+        /* Calculate and print timing statistics */
+        total_time = 0;
+        for (int j = 0; j < 7; j++) {
+            total_time += stage_times[j];
+        }
+        
+        printf("\n=== Encoder Timing Statistics ===\n");
+        printf("Stage 1 (Read BMP):            %8.4f ms\n", stage_times[0] * 1000);
+        printf("Stage 2 (Color Conversion):    %8.4f ms\n", stage_times[1] * 1000);
+        printf("Stage 3 (Downsampling):        %8.4f ms\n", stage_times[2] * 1000);
+        printf("Stage 4 (Forward DCT):         %8.4f ms\n", stage_times[3] * 1000);
+        printf("Stage 5 (Quantization):        %8.4f ms\n", stage_times[4] * 1000);
+        printf("Stage 6 (Huffman Encoding):    %8.4f ms\n", stage_times[5] * 1000);
+        printf("Stage 7 (Write JPG):           %8.4f ms\n", stage_times[6] * 1000);
+        printf("----------------------------------\n");
+        printf("Total Time:                    %8.4f ms\n", total_time * 1000);
+        printf("==================================\n\n");
 
         bytearray_free(&huffmanData);
         free(image.blocks);
