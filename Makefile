@@ -10,13 +10,13 @@ encoder: src/encoder.cpp
 	@mkdir -p bin
 	g++ --std=c++14 -O3 -o bin/encoder src/encoder.cpp
 
-decoder_c: src/decoder_c.c
+decoder_c: src/decoder_c.c src/jpg_c.c
 	@mkdir -p bin
-	gcc -std=c99 -O3 -o bin/decoder_c src/decoder_c.c -lm
+	gcc -std=c99 -O3 -o bin/decoder_c src/decoder_c.c src/jpg_c.c -lm
 
-encoder_c: src/encoder_c.c
+encoder_c: src/encoder_c.c src/jpg_c.c
 	@mkdir -p bin
-	gcc -std=c99 -O3 -o bin/encoder_c src/encoder_c.c -lm
+	gcc -std=c99 -O3 -o bin/encoder_c src/encoder_c.c src/jpg_c.c -lm
 
 clean:
 	rm -rf bin
