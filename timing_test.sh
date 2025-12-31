@@ -90,6 +90,10 @@ declare -a stage7_times
 declare -a total_times
 MCU_COUNT=0
 
+# Create log file with timestamp
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+LOG_FILE="${TIMESTAMP}_timing.log"
+
 # Display test information
 echo -e "${BLUE}======================================${NC}"
 echo -e "${BLUE}  JPEG Timing Test${NC}"
@@ -100,11 +104,39 @@ echo -e "Iterations:      ${GREEN}$ITERATIONS${NC}"
 if [ "$OPERATION" == "encode" ]; then
     echo -e "Sampling Factor: ${GREEN}$SAMPLING_FACTOR${NC}"
 fi
+echo -e "Log File:        ${GREEN}$LOG_FILE${NC}"
 echo -e "${BLUE}======================================${NC}"
 echo ""
 
+# Write log file header
+{
+    echo "======================================"
+    echo "  JPEG Timing Test Log"
+    echo "======================================"
+    echo "Date/Time:       $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "Operation:       $OPERATION"
+    echo "Input File:      $FILE_PATH"
+    echo "Iterations:      $ITERATIONS"
+    if [ "$OPERATION" == "encode" ]; then
+        echo "Sampling Factor: $SAMPLING_FACTOR"
+    fi
+    echo "======================================"
+    echo ""
+} > "$LOG_FILE"
+
 # Run the operations
 echo -e "${YELLOW}Running $ITERATIONS iterations...${NC}"
+
+# Write column headers to log file
+if [ "$OPERATION" == "encode" ]; then
+    echo "Iter    Stage1(ms)  Stage2(ms)  Stage3(ms)  Stage4(ms)  Stage5(ms)  Stage6(ms)  Stage7(ms)  Total(ms)" >> "$LOG_FILE"
+    echo "                    Read BMP    ColorConv   Downsample  ForwardDCT  Quantize    Huffman     WriteJPG" >> "$LOG_FILE"
+else
+    echo "Iter    Stage1(ms)  Stage2(ms)  Stage3(ms)  Stage4(ms)  Stage5(ms)  Stage6(ms)  Stage7(ms)  Total(ms)" >> "$LOG_FILE"
+    echo "                    ReadJPEG    HuffmanDec  Dequantize  InverseDCT  Upsample    ColorConv   WriteBMP" >> "$LOG_FILE"
+fi
+echo "----    ----------  ----------  ----------  ----------  ----------  ----------  ----------  ----------" >> "$LOG_FILE"
+
 for i in $(seq 1 $ITERATIONS); do
     printf "\rProgress: [%3d/%3d] " $i $ITERATIONS
     
@@ -139,6 +171,10 @@ for i in $(seq 1 $ITERATIONS); do
     stage6_times+=($stage6)
     stage7_times+=($stage7)
     total_times+=($total)
+    
+    # Write to log file
+    printf "%4d    %10.4f  %10.4f  %10.4f  %10.4f  %10.4f  %10.4f  %10.4f  %10.4f\n" \
+        $i "$stage1" "$stage2" "$stage3" "$stage4" "$stage5" "$stage6" "$stage7" "$total" >> "$LOG_FILE"
 done
 
 echo ""
@@ -164,6 +200,36 @@ avg_stage5=$(calc_avg "${stage5_times[@]}")
 avg_stage6=$(calc_avg "${stage6_times[@]}")
 avg_stage7=$(calc_avg "${stage7_times[@]}")
 avg_total=$(calc_avg "${total_times[@]}")
+
+# Write averages to log file
+{
+    echo ""
+    echo "======================================"
+    echo "  Average Results"
+    echo "======================================"
+    echo "Total MCUs processed: $MCU_COUNT"
+    echo ""
+    if [ "$OPERATION" == "encode" ]; then
+        printf "Stage 1 (Read BMP):            %10.4f ms\n" "$avg_stage1"
+        printf "Stage 2 (Color Conversion):    %10.4f ms\n" "$avg_stage2"
+        printf "Stage 3 (Downsampling):        %10.4f ms\n" "$avg_stage3"
+        printf "Stage 4 (Forward DCT):         %10.4f ms\n" "$avg_stage4"
+        printf "Stage 5 (Quantization):        %10.4f ms\n" "$avg_stage5"
+        printf "Stage 6 (Huffman Encoding):    %10.4f ms\n" "$avg_stage6"
+        printf "Stage 7 (Write JPG):           %10.4f ms\n" "$avg_stage7"
+    else
+        printf "Stage 1 (Read JPEG):           %10.4f ms\n" "$avg_stage1"
+        printf "Stage 2 (Huffman Decoding):    %10.4f ms\n" "$avg_stage2"
+        printf "Stage 3 (Dequantization):      %10.4f ms\n" "$avg_stage3"
+        printf "Stage 4 (Inverse DCT):         %10.4f ms\n" "$avg_stage4"
+        printf "Stage 5 (Upsampling):          %10.4f ms\n" "$avg_stage5"
+        printf "Stage 6 (Color Conversion):    %10.4f ms\n" "$avg_stage6"
+        printf "Stage 7 (Write BMP):           %10.4f ms\n" "$avg_stage7"
+    fi
+    echo "--------------------------------------"
+    printf "Total Time:                    %10.4f ms\n" "$avg_total"
+    echo "======================================"
+} >> "$LOG_FILE"
 
 # Display results
 echo -e "${BLUE}======================================${NC}"
@@ -194,4 +260,6 @@ fi
 echo "----------------------------------"
 printf "Total Time:                    %8s ms\n" "$avg_total"
 echo -e "${BLUE}======================================${NC}"
+echo ""
+echo -e "${GREEN}✓ Log file saved: $LOG_FILE${NC}"
 echo ""
