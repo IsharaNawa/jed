@@ -1,1 +1,3 @@
 bin/
+timing.log
+*_timing.log
