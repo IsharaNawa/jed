@@ -130,10 +130,10 @@ echo -e "${YELLOW}Running $ITERATIONS iterations...${NC}"
 # Write column headers to log file
 if [ "$OPERATION" == "encode" ]; then
     echo "Iter    Stage1(ms)  Stage2(ms)  Stage3(ms)  Stage4(ms)  Stage5(ms)  Stage6(ms)  Stage7(ms)  Total(ms)" >> "$LOG_FILE"
-    echo "                    Read BMP    ColorConv   Downsample  ForwardDCT  Quantize    Huffman     WriteJPG" >> "$LOG_FILE"
+    echo "        Read BMP    ColorConv   Downsample  ForwardDCT  Quantize    Huffman     WriteJPG" >> "$LOG_FILE"
 else
     echo "Iter    Stage1(ms)  Stage2(ms)  Stage3(ms)  Stage4(ms)  Stage5(ms)  Stage6(ms)  Stage7(ms)  Total(ms)" >> "$LOG_FILE"
-    echo "                    ReadJPEG    HuffmanDec  Dequantize  InverseDCT  Upsample    ColorConv   WriteBMP" >> "$LOG_FILE"
+    echo "        ReadJPEG    HuffmanDec  Dequantize  InverseDCT  Upsample    ColorConv   WriteBMP" >> "$LOG_FILE"
 fi
 echo "----    ----------  ----------  ----------  ----------  ----------  ----------  ----------  ----------" >> "$LOG_FILE"
 
@@ -181,15 +181,9 @@ echo ""
 echo -e "${GREEN}✓ Completed all iterations${NC}"
 echo ""
 
-# Calculate averages
+# Calculate averages using awk (works on minimal systems without bc)
 calc_avg() {
-    local sum=0
-    local count=0
-    for val in "$@"; do
-        sum=$(echo "$sum + $val" | bc)
-        count=$((count + 1))
-    done
-    echo "scale=4; $sum / $count" | bc
+    printf '%s\n' "$@" | awk '{sum += $1; count++} END {if (count > 0) printf "%.4f", sum/count; else print "0"}'
 }
 
 avg_stage1=$(calc_avg "${stage1_times[@]}")
